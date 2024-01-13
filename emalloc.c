@@ -485,8 +485,10 @@ void* emalloc(size_t size)
             ROUND_TO(bsize + sizeof(mm_reserve_t), initial_reserve_size);
         if (add_reserve(new_reserve_size)) return NULL;
         b = alloc_from_reserve(bsize);
-        if (!b)  // should never happen
+        if (!b){  // should never happen{{
+            printf("should not happen\n");
             return NULL;
+        }    
     }
 
     b->header = bsize | alloc_mask;

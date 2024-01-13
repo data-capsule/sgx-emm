@@ -93,6 +93,7 @@ void dump_ema_root(ema_root_t* root)
         dump_ema_node(node, index++);
         node = node->next;
     }
+    printf("done with dump_ema_root\n");
 }
 
 #endif
@@ -336,7 +337,7 @@ int ema_split(ema_t* ema, size_t addr, bool new_lower, ema_t** ret_node)
     assert(ret_node);
 #endif
 
-    ema_t* new_node = (ema_t*)emalloc(sizeof(ema_t));
+    ema_t* new_node = (ema_t*)malloc(sizeof(ema_t));
     if (!new_node)
     {
         return ENOMEM;
@@ -349,7 +350,7 @@ int ema_split(ema_t* ema, size_t addr, bool new_lower, ema_t** ret_node)
         int ret = bit_array_split(ema->eaccept_map, pos, &low, &high);
         if (ret)
         {
-            efree(new_node);
+            free(new_node);
             return ret;
         }
     }
@@ -594,7 +595,7 @@ ema_t* ema_new(size_t addr, size_t size, uint32_t alloc_flags,
 
     // ensure region [start, start+size) is in the list so emalloc won't use it.
     insert_ema(&tmp, next_ema);
-    ema_t* node = (ema_t*)emalloc(sizeof(ema_t));
+    ema_t* node = (ema_t*)malloc(sizeof(ema_t));
     if (node)
     {
         *node = tmp;
@@ -615,14 +616,17 @@ void ema_destroy(ema_t* ema)
     {
         bit_array_delete(ema->eaccept_map);
     }
-    efree(ema);
+    free(ema);
 }
 
 static int eaccept_range_forward(const sec_info_t* si, size_t start, size_t end)
 {
     while (start < end)
     {
-        if (do_eaccept(si, start)) abort();
+        if (do_eaccept(si, start)){
+            printf("do_eaccept: %p, %p\n", start, end);
+            abort();
+        }
         start += SGX_PAGE_SIZE;
     }
     return 0;
@@ -797,7 +801,10 @@ static int ema_do_uncommit_real(ema_t* node, size_t real_start, size_t real_end,
         ret = sgx_mm_modify_ocall(block_start, block_length,
                                   prot | SGX_EMA_PAGE_TYPE_TRIM,
                                   prot | SGX_EMA_PAGE_TYPE_TRIM);
-        if (ret) return EFAULT;
+        if (ret) {
+            printf("sgx_mm_modify_ocall failed\n");
+            return EFAULT;
+        }
 
         real_start = block_end;
     }
@@ -809,6 +816,7 @@ int ema_do_uncommit(ema_t* node, size_t start, size_t end)
     size_t real_start = MAX(start, node->start_addr);
     size_t real_end = MIN(end, node->start_addr + node->size);
     int prot = node->si_flags & SGX_EMA_PROT_MASK;
+    printf("[ema_do_uncommit] prot: %d\n", prot);
     if (prot == SGX_EMA_PROT_NONE)  // need READ for trimming
         ema_modify_permissions(node, start, end, SGX_EMA_PROT_READ);
     return ema_do_uncommit_real(node, real_start, real_end, prot);
@@ -852,6 +860,9 @@ int ema_do_uncommit_loop(ema_t* first, ema_t* last, size_t start, size_t end)
 
 int ema_do_dealloc(ema_t* node, size_t start, size_t end)
 {
+#ifdef NDEBUG
+    printf("ema_do_dealloc %p-%p\n", (void *) start, (void *) end);
+#endif
     int alloc_flag = node->alloc_flags & SGX_EMA_ALLOC_FLAGS_MASK;
     size_t real_start = MAX(start, node->start_addr);
     size_t real_end = MIN(end, node->start_addr + node->size);
@@ -870,12 +881,17 @@ int ema_do_dealloc(ema_t* node, size_t start, size_t end)
         ema_modify_permissions(node, start, end, SGX_EMA_PROT_READ);
     // clear protections flag for dealloc
     ret = ema_do_uncommit_real(node, real_start, real_end, SGX_EMA_PROT_NONE);
-    if (ret != 0) return ret;
+    if (ret != 0) {
+        printf("ema_do_uncommit_real failed\n");
+        return ret;
+    }
 
+    
 split_and_destroy:
     // potential ema split
     if (real_start > node->start_addr)
     {
+        printf("real_start > node->start_addr\n");
         ret = ema_split(node, real_start, false, &tmp_node);
         if (ret) return ret;
         assert(tmp_node);
@@ -897,6 +913,9 @@ split_and_destroy:
 
 int ema_do_dealloc_loop(ema_t* first, ema_t* last, size_t start, size_t end)
 {
+#ifdef NDEBUG
+    printf("ema_do_dealloc_loop: %p-%p\n", (void *) start, (void *) end);
+#endif
     int ret = 0;
     ema_t *curr = first, *next = NULL;
 
@@ -1259,6 +1278,10 @@ int ema_do_alloc(ema_t* node)
     if (alloc_flags & SGX_EMA_COMMIT_NOW)
     {
         int grow_up = (alloc_flags & SGX_EMA_GROWSDOWN) ? 0 : 1;
+#ifdef NDEBUG
+        // printf("node->si_flags & SGX_EMA_PAGE_TYPE_MASK %x, alloc_flags: %x\n", (int)(node->si_flags & SGX_EMA_PAGE_TYPE_MASK), alloc_flags);
+        // printf("[ema_do_alloc] do_commit: %p, 0x%x -- node->si_flags: %x, alloc_flags: %x\n", tmp_addr, size, node->si_flags, alloc_flags);
+#endif
         ret = do_commit(tmp_addr, size, node->si_flags, grow_up);
         if (ret)
         {
@@ -1271,5 +1294,6 @@ int ema_do_alloc(ema_t* node)
     else
         ret = ema_clear_eaccept_full(node);
 
+    printf("returning from ema_do_alloc\n");
     return ret;
 }

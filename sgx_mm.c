@@ -61,18 +61,30 @@ int mm_alloc_internal(void* addr, size_t size, int flags,
     // Must have one of these:
     if (!(alloc_flags &
           (SGX_EMA_RESERVE | SGX_EMA_COMMIT_NOW | SGX_EMA_COMMIT_ON_DEMAND)))
-        return EINVAL;
+          {
+            printf("!(alloc_flags & (SGX_EMA_RESERVE | SGX_EMA_COMMIT_NOW | SGX_EMA_COMMIT_ON_DEMAND)\n");
+            return EINVAL;
+          }
 
     uint64_t page_type = (uint64_t)flags & SGX_EMA_PAGE_TYPE_MASK;
-    if ((uint64_t)(~LEGAL_ALLOC_PAGE_TYPE) & page_type) return EINVAL;
+    if ((uint64_t)(~LEGAL_ALLOC_PAGE_TYPE) & page_type){
+        printf("(~LEGAL_ALLOC_PAGE_TYPE) & page_type\n");
+        return EINVAL;
+    }
     if (page_type == 0) page_type = SGX_EMA_PAGE_TYPE_REG;
 
-    if (size % SGX_PAGE_SIZE) return EINVAL;
+    if (size % SGX_PAGE_SIZE) {
+        printf("size \% SGX_PAGE_SIZE\n");
+        return EINVAL;
+    }
 
     uint8_t align_flag = (uint8_t)(((uint32_t)flags & SGX_EMA_ALIGNMENT_MASK) >>
                                    SGX_EMA_ALIGNMENT_SHIFT);
     if (align_flag == 0) align_flag = 12;
-    if (align_flag < 12) return EINVAL;
+    if (align_flag < 12) {
+        printf("align_flag < 12\n");
+        return EINVAL;
+    };
 
     uint64_t align_mask = (uint64_t)(1ULL << align_flag) - 1ULL;
 
@@ -81,7 +93,9 @@ int mm_alloc_internal(void* addr, size_t size, int flags,
     if ((tmp_addr & align_mask)) return EINVAL;
     if (addr && (!sgx_mm_is_within_enclave(addr, size))) return EACCES;
 
+    printf("[mm_alloc_internal] before sgx_mm_mutex_lock\n");
     if (sgx_mm_mutex_lock(mm_lock)) return EFAULT;
+    printf("[mm_alloc_internal] after sgx_mm_mutex_lock\n");
 
     uint64_t si_flags = (uint64_t)SGX_EMA_PROT_READ_WRITE | page_type;
     if (alloc_flags & SGX_EMA_RESERVE)
@@ -98,10 +112,12 @@ int mm_alloc_internal(void* addr, size_t size, int flags,
         ema_t* first = NULL;
         ema_t* last = NULL;
 
+        printf("search_ema_range\n");
         bool exist_in_root = !search_ema_range(root, start, end, &first, &last);
 
         if (exist_in_root)
         {
+            printf("[[mm_alloc_internal]] exists in root already");
             // Use the reserved space earlier
             node = ema_realloc_from_reserve_range(
                 first, last, start, end, alloc_flags, si_flags, handler, priv);
@@ -121,6 +137,7 @@ int mm_alloc_internal(void* addr, size_t size, int flags,
         }
         else
         {
+            printf("[[mm_alloc_internal]] no existing ema that is overlapped!\n");
             // No existing ema overlapping with requested range
             ret = find_free_region_at(root, tmp_addr, size, &next_ema);
             if (!ret && fixed_alloc)
@@ -135,6 +152,7 @@ int mm_alloc_internal(void* addr, size_t size, int flags,
     }
     // At this point, ret == false means:
     // Either no address given or the given address can't be used
+    printf("tmp_addr: %p cannot be used\n");
     if (!ret)
         ret = find_free_region(root, size, (1ULL << align_flag), &tmp_addr,
                                &next_ema);
@@ -149,6 +167,7 @@ int mm_alloc_internal(void* addr, size_t size, int flags,
     assert(tmp_addr);  // found address
     assert(next_ema);  // found where to insert
     // create and insert the node
+    printf("[mm_alloc_internal] create a new ema node\n");
     node =
         ema_new(tmp_addr, size, alloc_flags, si_flags, handler, priv, next_ema);
     if (!node)
@@ -158,7 +177,9 @@ int mm_alloc_internal(void* addr, size_t size, int flags,
     }
 alloc_action:
     assert(node);
+    printf("[mm_alloc_internal] before ema_do_alloc\n");
     status = ema_do_alloc(node);
+    printf("[mm_alloc_internal] after ema_do_alloc\n");
     if (status != 0)
     {
         goto alloc_failed;
@@ -181,10 +202,15 @@ int sgx_mm_alloc(void* addr, size_t size, int flags,
                  sgx_enclave_fault_handler_t handler, void* priv,
                  void** out_addr)
 {
+    printf("sgx_mm_alloc: %p, mm_user_base: %p, mm_user_end: %p, mm_size: %lx, flags: %x\n", addr, mm_user_base, mm_user_end,
+            mm_user_end - mm_user_base, flags);
     if (flags & SGX_EMA_SYSTEM) return EINVAL;
 
-    return mm_alloc_internal(addr, size, flags, handler, priv, out_addr,
+    printf("before mm_alloc_internal\n");
+    int ret =  mm_alloc_internal(addr, size, flags, handler, priv, out_addr,
                              &g_user_ema_root);
+    printf("after mm_alloc_internal\n");
+    return ret; 
 }
 
 int mm_commit_internal(void* addr, size_t size, ema_root_t* root)
@@ -241,6 +267,7 @@ int sgx_mm_uncommit(void* addr, size_t size)
 
 int mm_dealloc_internal(void* addr, size_t size, ema_root_t* root)
 {
+    printf("mm_dealloc_internal\n");
     int ret = EFAULT;
     size_t start = (size_t)addr;
     size_t end = start + size;
@@ -250,6 +277,7 @@ int mm_dealloc_internal(void* addr, size_t size, ema_root_t* root)
     ret = search_ema_range(root, start, end, &first, &last);
     if (ret < 0)
     {
+        printf("search_ema_range failed: start: %p, end: %p\n", (void *) start, (void *) end);
         ret = EINVAL;
         goto unlock;
     }
@@ -302,6 +330,7 @@ int sgx_mm_commit_data(void* addr, size_t size, uint8_t* data, int prot)
 
 int mm_modify_type_internal(void* addr, size_t size, int type, ema_root_t* root)
 {
+    printf("called mm_modify_type_internal\n");
     // for this API, TCS is the only valid page type
     if (type != SGX_EMA_PAGE_TYPE_TCS)
     {
@@ -331,6 +360,7 @@ int mm_modify_type_internal(void* addr, size_t size, int type, ema_root_t* root)
 
     // one page only, covered by a single ema node
     assert(ema_next(first) == last);
+    printf("[  mm_modify_type_internal]\n");
     ret = ema_change_to_tcs(first, (size_t)addr);
 unlock:
     sgx_mm_mutex_unlock(mm_lock);
@@ -345,6 +375,7 @@ int sgx_mm_modify_type(void* addr, size_t size, int type)
 int mm_modify_permissions_internal(void* addr, size_t size, int prot,
                                    ema_root_t* root)
 {
+    printf("[mm_modify_permissions_internal], addr: %p, size: %lx, prot: %x\n", addr, size, prot);
     int ret = EFAULT;
     size_t start = (size_t)addr;
     size_t end = start + size;
@@ -359,12 +390,15 @@ int mm_modify_permissions_internal(void* addr, size_t size, int prot,
 
     if (sgx_mm_mutex_lock(mm_lock)) return ret;
     ret = search_ema_range(root, start, end, &first, &last);
+    printf("after search_ema_range\n");
     if (ret < 0)
     {
         ret = EINVAL;
         goto unlock;
     }
+    printf("before ema_modify_permissions_loop\n");
     ret = ema_modify_permissions_loop(first, last, start, end, prot);
+    printf("after ema_modify_permissions_loop\n");
 unlock:
     sgx_mm_mutex_unlock(mm_lock);
     return ret;
@@ -447,6 +481,9 @@ unlock:
 
 int sgx_mm_init(size_t user_base, size_t user_end)
 {
+    printf("******\n");
+    printf("called sgx_mm_init: %p-%p\n", user_base, user_end);
+    
     mm_lock = sgx_mm_mutex_create();
     if (!mm_lock) return EFAULT;
 
@@ -454,5 +491,5 @@ int sgx_mm_init(size_t user_base, size_t user_end)
     mm_user_end = user_end;
 
     if (!sgx_mm_register_pfhandler(sgx_mm_enclave_pfhandler)) return EFAULT;
-    return emalloc_init();
+    return 0;
 }
