@@ -5,7 +5,7 @@ project(SGX_MM_Library)
 
 # Include directories
 include_directories(include)
-include_directories(../../../common/inc/tlibc)
+include_directories(tlibc)
 
 # Compiler flags
 add_definitions(-Wno-missing-braces)
